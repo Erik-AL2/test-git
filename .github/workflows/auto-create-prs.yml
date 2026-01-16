@@ -1,0 +1,112 @@
+name: Auto-crear PRs para Feature
+
+on:
+  create:
+    branches:
+      - 'feature/**'
+
+jobs:
+  create-prs:
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'branch'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Extraer nombre de feature
+        id: feature
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Extraer título limpio del nombre de branch
+          # feature/backend-auth-API-123 -> backend-auth-API-123
+          FEATURE_NAME="${BRANCH_NAME#feature/}"
+          echo "name=$FEATURE_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Crear PR a dev
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.feature.outputs.branch }}
+          base: dev
+          title: "[DEV] ${{ steps.feature.outputs.name }}"
+          body: |
+            ## PR #1: Feature → dev
+            
+            **Propósito:** Testing inicial y validación CI/CD
+            
+            ### Checklist
+            - [ ] Tests pasando
+            - [ ] Linter OK
+            - [ ] Build exitoso
+            
+            ---
+            *Este PR fue creado automáticamente*
+          draft: false
+          labels: |
+            feature
+            auto-created
+      
+      - name: Crear PR a stg
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.feature.outputs.branch }}
+          base: stg
+          title: "[STG] ${{ steps.feature.outputs.name }}"
+          body: |
+            ## PR #2: Feature → stg
+            
+            **Propósito:** QA testing y validación de stakeholders
+            
+            ### Requisitos
+            - [ ] PR a dev mergeado ✓
+            - [ ] Tests en dev OK
+            - [ ] QA aprobado
+            
+            ### Checklist
+            - [ ] Testing manual completo
+            - [ ] Validación stakeholders
+            - [ ] Sin bugs críticos
+            
+            ---
+            *Este PR fue creado automáticamente. Solo mergear después de que dev esté OK*
+          draft: true
+          labels: |
+            feature
+            auto-created
+      
+      - name: Crear PR a main
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.feature.outputs.branch }}
+          base: main
+          title: "[PROD] ${{ steps.feature.outputs.name }}"
+          body: |
+            ## PR #3: Feature → main
+            
+            **Propósito:** Release a producción
+            
+            ### Requisitos
+            - [ ] PR a dev mergeado ✓
+            - [ ] PR a stg mergeado ✓
+            - [ ] QA aprobado en stg
+            - [ ] 2+ aprobaciones tech lead
+            
+            ### Checklist
+            - [ ] Tests pasando en todos los ambientes
+            - [ ] QA sign-off completo
+            - [ ] Documentación actualizada
+            - [ ] Release notes preparadas
+            
+            ---
+            *Este PR fue creado automáticamente. Solo mergear después de que stg esté OK*
+          draft: true
+          labels: |
+            feature
+            auto-created
