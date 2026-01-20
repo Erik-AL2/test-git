@@ -2,111 +2,215 @@ name: Auto-crear PRs para Feature
 
 on:
   create:
+  push:
     branches:
       - 'feature/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   create-prs:
     runs-on: ubuntu-latest
-    if: github.ref_type == 'branch'
+    if: startsWith(github.ref, 'refs/heads/feature/')
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.ref }}
       
-      - name: Extraer nombre de feature
+      - name: Crear labels si no existen
+        run: |
+          # Crear label 'feature' si no existe
+          gh label create feature --color 0E8A16 --description "Feature branch" --force || true
+          
+          # Crear label 'auto-created' si no existe
+          gh label create auto-created --color 1D76DB --description "Creado automáticamente" --force || true
+          
+          echo "✓ Labels verificados/creados"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extraer información de feature
         id: feature
         run: |
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
           
-          # Extraer título limpio del nombre de branch
           # feature/backend-auth-API-123 -> backend-auth-API-123
           FEATURE_NAME="${BRANCH_NAME#feature/}"
           echo "name=$FEATURE_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Branch: $BRANCH_NAME"
+          echo "Feature: $FEATURE_NAME"
+      
+      - name: Verificar si PRs ya existen
+        id: check
+        run: |
+          # Verificar PR a dev
+          DEV_PR=$(gh pr list --base dev --head ${{ steps.feature.outputs.branch }} --json number --jq '.[0].number' || echo "")
+          echo "dev_exists=$([[ -n "$DEV_PR" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          
+          # Verificar PR a stg
+          STG_PR=$(gh pr list --base stg --head ${{ steps.feature.outputs.branch }} --json number --jq '.[0].number' || echo "")
+          echo "stg_exists=$([[ -n "$STG_PR" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          
+          # Verificar PR a main
+          MAIN_PR=$(gh pr list --base main --head ${{ steps.feature.outputs.branch }} --json number --jq '.[0].number' || echo "")
+          echo "main_exists=$([[ -n "$MAIN_PR" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Crear PR a dev
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ steps.feature.outputs.branch }}
-          base: dev
-          title: "[DEV] ${{ steps.feature.outputs.name }}"
-          body: |
-            ## PR #1: Feature → dev
-            
-            **Propósito:** Testing inicial y validación CI/CD
-            
-            ### Checklist
-            - [ ] Tests pasando
-            - [ ] Linter OK
-            - [ ] Build exitoso
-            
-            ---
-            *Este PR fue creado automáticamente*
-          draft: false
-          labels: |
-            feature
-            auto-created
+        id: create-dev
+        if: steps.check.outputs.dev_exists == 'false'
+        run: |
+          BODY=$(cat <<'EOF'
+          ## PR #1: Feature → dev
+          **Propósito:** Testing inicial y validación CI/CD
+          
+          ### Checklist
+          - [ ] Tests pasando
+          - [ ] Linter OK
+          - [ ] Build exitoso
+          
+          ---
+          *Este PR fue creado automáticamente*
+          EOF
+          )
+          
+          if gh pr create \
+            --base dev \
+            --head ${{ steps.feature.outputs.branch }} \
+            --title "[DEV] ${{ steps.feature.outputs.name }}" \
+            --body "$BODY" \
+            --label "feature,auto-created"; then
+            echo "created=true" >> $GITHUB_OUTPUT
+            echo "✓ PR a dev creado"
+          else
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "✗ Error al crear PR a dev"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Crear PR a stg
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ steps.feature.outputs.branch }}
-          base: stg
-          title: "[STG] ${{ steps.feature.outputs.name }}"
-          body: |
-            ## PR #2: Feature → stg
-            
-            **Propósito:** QA testing y validación de stakeholders
-            
-            ### Requisitos
-            - [ ] PR a dev mergeado ✓
-            - [ ] Tests en dev OK
-            - [ ] QA aprobado
-            
-            ### Checklist
-            - [ ] Testing manual completo
-            - [ ] Validación stakeholders
-            - [ ] Sin bugs críticos
-            
-            ---
-            *Este PR fue creado automáticamente. Solo mergear después de que dev esté OK*
-          draft: true
-          labels: |
-            feature
-            auto-created
+        id: create-stg
+        if: steps.check.outputs.stg_exists == 'false'
+        run: |
+          BODY=$(cat <<'EOF'
+          ## PR #2: Feature → stg
+          
+          **Propósito:** QA testing y validación de stakeholders
+          
+          ### Requisitos
+          - [ ] PR a dev mergeado ✓
+          - [ ] Tests en dev OK
+          - [ ] QA aprobado
+          
+          ### Checklist
+          - [ ] Testing manual completo
+          - [ ] Validación stakeholders
+          - [ ] Sin bugs críticos
+          
+          ---
+          *Este PR fue creado automáticamente. Solo mergear después de que dev esté OK*
+          EOF
+          )
+          
+          if gh pr create \
+            --base stg \
+            --head ${{ steps.feature.outputs.branch }} \
+            --title "[STG] ${{ steps.feature.outputs.name }}" \
+            --body "$BODY" \
+            --draft \
+            --label "feature,auto-created"; then
+            echo "created=true" >> $GITHUB_OUTPUT
+            echo "✓ PR a stg creado (draft)"
+          else
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "✗ Error al crear PR a stg"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Crear PR a main
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ steps.feature.outputs.branch }}
-          base: main
-          title: "[PROD] ${{ steps.feature.outputs.name }}"
-          body: |
-            ## PR #3: Feature → main
-            
-            **Propósito:** Release a producción
-            
-            ### Requisitos
-            - [ ] PR a dev mergeado ✓
-            - [ ] PR a stg mergeado ✓
-            - [ ] QA aprobado en stg
-            - [ ] 2+ aprobaciones tech lead
-            
-            ### Checklist
-            - [ ] Tests pasando en todos los ambientes
-            - [ ] QA sign-off completo
-            - [ ] Documentación actualizada
-            - [ ] Release notes preparadas
-            
-            ---
-            *Este PR fue creado automáticamente. Solo mergear después de que stg esté OK*
-          draft: true
-          labels: |
-            feature
-            auto-created
+        id: create-main
+        if: steps.check.outputs.main_exists == 'false'
+        run: |
+          BODY=$(cat <<'EOF'
+          ## PR #3: Feature → main
+          
+          **Propósito:** Release a producción
+          
+          ### Requisitos
+          - [ ] PR a dev mergeado ✓
+          - [ ] PR a stg mergeado ✓
+          - [ ] QA aprobado en stg
+          - [ ] 2+ aprobaciones tech lead
+          
+          ### Checklist
+          - [ ] Tests pasando en todos los ambientes
+          - [ ] QA sign-off completo
+          - [ ] Documentación actualizada
+          - [ ] Release notes preparadas
+          
+          ---
+          *Este PR fue creado automáticamente. Solo mergear después de que stg esté OK*
+          EOF
+          )
+          
+          if gh pr create \
+            --base main \
+            --head ${{ steps.feature.outputs.branch }} \
+            --title "[PROD] ${{ steps.feature.outputs.name }}" \
+            --body "$BODY" \
+            --draft \
+            --label "feature,auto-created"; then
+            echo "created=true" >> $GITHUB_OUTPUT
+            echo "✓ PR a main creado (draft)"
+          else
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "✗ Error al crear PR a main"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Resumen
+        if: always()
+        run: |
+          echo "### 📋 Resumen de PRs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Feature: \`${{ steps.feature.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.check.outputs.dev_exists }}" == "true" ]]; then
+            echo "- ⏭️  PR a \`dev\`: Ya existe" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.create-dev.outputs.created }}" == "true" ]]; then
+            echo "- ✓ PR a \`dev\`: Creado" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️  PR a \`dev\`: No creado" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ steps.check.outputs.stg_exists }}" == "true" ]]; then
+            echo "- ⏭️  PR a \`stg\`: Ya existe" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.create-stg.outputs.created }}" == "true" ]]; then
+            echo "- ✓ PR a \`stg\`: Creado (draft)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️  PR a \`stg\`: No creado" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ steps.check.outputs.main_exists }}" == "true" ]]; then
+            echo "- ⏭️  PR a \`main\`: Ya existe" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.create-main.outputs.created }}" == "true" ]]; then
+            echo "- ✓ PR a \`main\`: Creado (draft)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️  PR a \`main\`: No creado" >> $GITHUB_STEP_SUMMARY
+          fi
